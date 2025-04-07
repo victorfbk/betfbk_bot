@@ -34,6 +34,10 @@ function gerarMensagem(match, placarInicial, eventos = []) {
   return eventos.length ? `${header}\n\n${eventosTexto}` : header;
 }
 
+function normalizarTexto(texto) {
+  return texto.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, '');
+}
+
 async function buscarPartidas() {
   const browser = await puppeteer.launch({
     headless: true,
@@ -107,7 +111,7 @@ async function buscarPartidas() {
     const mediaHome = calcularMediaAtaquesPorMinuto(dangerHomeTeam, minute);
     const mediaAway = calcularMediaAtaquesPorMinuto(dangerAwayTeam, minute);
 
-    const matchKey = `${homeTeam}-${awayTeam}-${league}`;
+    const matchKey = `${normalizarTexto(homeTeam)}-${normalizarTexto(awayTeam)}-${normalizarTexto(league)}`;
     const matchData = SEEN_MATCHES.get(matchKey);
 
     if (!matchData) {
