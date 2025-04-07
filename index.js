@@ -101,7 +101,7 @@ async function buscarPartidas() {
       league,
     } = match;
 
-    if (!minute || !homeTeam || !awayTeam || minute < 59 || minute > 100)
+    if (!minute || !homeTeam || !awayTeam || minute < 64 || minute > 71)
       continue;
 
     const mediaHome = calcularMediaAtaquesPorMinuto(dangerHomeTeam, minute);
