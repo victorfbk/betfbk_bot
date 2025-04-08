@@ -7,6 +7,7 @@ puppeteer.use(StealthPlugin());
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.BOT_TOKEN}`;
 const CHAT_ID = process.env.CHAT_ID;
+
 const SEEN_MATCHES = new Map();
 
 function calcularMediaAtaquesPorMinuto(ataques, minuto) {
@@ -14,7 +15,7 @@ function calcularMediaAtaquesPorMinuto(ataques, minuto) {
   return Number((ataques / minuto).toFixed(2));
 }
 
-function gerarMensagem(match, headerData, eventos = []) {
+function gerarMensagem(match, placarInicial, eventos = []) {
   const fogoHome = match.dangerHomeTeam > match.dangerAwayTeam ? "🔥" : "";
   const fogoAway = match.dangerAwayTeam > match.dangerHomeTeam ? "🔥" : "";
 
@@ -22,8 +23,8 @@ function gerarMensagem(match, headerData, eventos = []) {
 🏆 ${match.league}
 ⚔️ ${match.homeTeam} ${fogoHome} vs ${fogoAway} ${match.awayTeam}
 ⏱️ Minuto: ${match.minute}
-📊 Placar Inicial: ${headerData.placarInicial}
-🚀 Ataques perigosos: ${headerData.danger}
+📊 Placar Inicial: ${placarInicial}
+🚀 Ataques perigosos: ${match.dangerHomeTeam} - ${match.dangerAwayTeam}
 `.trim();
 
   const eventosTexto = eventos
@@ -100,16 +101,22 @@ async function buscarPartidas() {
       league,
     } = match;
 
-    if (!minute || !homeTeam || !awayTeam) continue;
-
     const matchKey = `${homeTeam}-${awayTeam}-${league}`;
     const matchData = SEEN_MATCHES.get(matchKey);
 
-    // ===> BLOCO DE ENVIO
-    if (!matchData && minute >= 64 && minute <= 71) {
-      const mediaHome = calcularMediaAtaquesPorMinuto(dangerHomeTeam, minute);
-      const mediaAway = calcularMediaAtaquesPorMinuto(dangerAwayTeam, minute);
+    // Só pula partidas fora do intervalo SE ainda não foram enviadas
+    if (
+      !minute ||
+      !homeTeam ||
+      !awayTeam ||
+      (!matchData && (minute < 64 || minute > 71))
+    )
+      continue;
 
+    const mediaHome = calcularMediaAtaquesPorMinuto(dangerHomeTeam, minute);
+    const mediaAway = calcularMediaAtaquesPorMinuto(dangerAwayTeam, minute);
+
+    if (!matchData) {
       const isEmpate = scoreHomeTeam === scoreAwayTeam;
       const isDiferencaUmGol = Math.abs(scoreHomeTeam - scoreAwayTeam) === 1;
 
@@ -120,12 +127,7 @@ async function buscarPartidas() {
             (scoreAwayTeam < scoreHomeTeam && mediaAway >= 0.8)))
       ) {
         const placarInicial = `${scoreHomeTeam} x ${scoreAwayTeam}`;
-        const headerData = {
-          placarInicial,
-          danger: `${dangerHomeTeam} - ${dangerAwayTeam}`,
-        };
-
-        const msg = gerarMensagem(match, headerData, []);
+        const msg = gerarMensagem(match, placarInicial, []);
 
         const res = await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: CHAT_ID,
@@ -136,19 +138,17 @@ async function buscarPartidas() {
         console.log("📩 Partida enviada:", homeTeam, "vs", awayTeam);
 
         SEEN_MATCHES.set(matchKey, {
-          headerData,
+          minute,
           scoreHomeTeam,
           scoreAwayTeam,
           cornerHome,
           cornerAway,
           messageId: res.data.result.message_id,
           eventos: [],
+          placarInicial,
         });
       }
-    }
-
-    // ===> BLOCO DE ATUALIZAÇÃO
-    else if (matchData) {
+    } else {
       const anterior = matchData;
       const novosEventos = [];
       let mudou = false;
@@ -159,7 +159,7 @@ async function buscarPartidas() {
       ) {
         novosEventos.push({
           tipo: "⚽",
-          minuto,
+          minuto: minute,
           placar: `${scoreHomeTeam} x ${scoreAwayTeam}`,
         });
         mudou = true;
@@ -171,7 +171,7 @@ async function buscarPartidas() {
       ) {
         novosEventos.push({
           tipo: "🚩",
-          minuto,
+          minuto: minute,
           placar: "",
         });
         mudou = true;
@@ -179,43 +179,25 @@ async function buscarPartidas() {
 
       if (mudou) {
         const eventos = [...anterior.eventos, ...novosEventos];
-        const eventosUnicos = [];
-        const vistos = new Set();
+        const msg = gerarMensagem(match, anterior.placarInicial, eventos);
 
-        for (const ev of eventos) {
-          const chave = `${ev.tipo}-${ev.minuto}-${ev.placar}`;
-          if (!vistos.has(chave)) {
-            eventosUnicos.push(ev);
-            vistos.add(chave);
-          }
-        }
+        await axios.post(`${TELEGRAM_API}/editMessageText`, {
+          chat_id: CHAT_ID,
+          message_id: anterior.messageId,
+          text: msg,
+          parse_mode: "Markdown",
+        });
 
-        const msg = gerarMensagem(match, anterior.headerData, eventosUnicos);
+        SEEN_MATCHES.set(matchKey, {
+          ...anterior,
+          scoreHomeTeam,
+          scoreAwayTeam,
+          cornerHome,
+          cornerAway,
+          eventos,
+        });
 
-        try {
-          await axios.post(`${TELEGRAM_API}/editMessageText`, {
-            chat_id: CHAT_ID,
-            message_id: anterior.messageId,
-            text: msg,
-            parse_mode: "Markdown",
-          });
-
-          console.log("✏️ Mensagem atualizada:", homeTeam, "vs", awayTeam);
-
-          SEEN_MATCHES.set(matchKey, {
-            ...anterior,
-            scoreHomeTeam,
-            scoreAwayTeam,
-            cornerHome,
-            cornerAway,
-            eventos: eventosUnicos,
-          });
-        } catch (error) {
-          console.error(
-            "❌ Erro ao editar mensagem:",
-            error.response?.data || error.message
-          );
-        }
+        console.log("✏️ Mensagem atualizada:", homeTeam, "vs", awayTeam);
       }
     }
   }
@@ -225,4 +207,4 @@ async function buscarPartidas() {
 
 // 🔁 Executar a cada 1 minuto
 buscarPartidas();
-setInterval(buscarPartidas, 1 * 60 * 1000);
+setInterval(buscarPartidas, 60 * 1000);
