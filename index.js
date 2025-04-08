@@ -34,10 +34,6 @@ function gerarMensagem(match, placarInicial, eventos = []) {
   return eventos.length ? `${header}\n\n${eventosTexto}` : header;
 }
 
-function normalizarTexto(texto) {
-  return texto.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, '');
-}
-
 async function buscarPartidas() {
   const browser = await puppeteer.launch({
     headless: true,
@@ -111,7 +107,7 @@ async function buscarPartidas() {
     const mediaHome = calcularMediaAtaquesPorMinuto(dangerHomeTeam, minute);
     const mediaAway = calcularMediaAtaquesPorMinuto(dangerAwayTeam, minute);
 
-    const matchKey = `${normalizarTexto(homeTeam)}-${normalizarTexto(awayTeam)}-${normalizarTexto(league)}`;
+    const matchKey = `${homeTeam}-${awayTeam}-${league}`;
     const matchData = SEEN_MATCHES.get(matchKey);
 
     if (!matchData) {
@@ -177,25 +173,44 @@ async function buscarPartidas() {
 
       if (mudou) {
         const eventos = [...anterior.eventos, ...novosEventos];
-        const msg = gerarMensagem(match, anterior.placarInicial, eventos);
 
-        await axios.post(`${TELEGRAM_API}/editMessageText`, {
-          chat_id: CHAT_ID,
-          message_id: anterior.messageId,
-          text: msg,
-          parse_mode: "Markdown",
-        });
+        // Remover duplicados
+        const eventosUnicos = [];
+        const vistos = new Set();
+        for (const ev of eventos) {
+          const chave = `${ev.tipo}-${ev.minuto}-${ev.placar}`;
+          if (!vistos.has(chave)) {
+            eventosUnicos.push(ev);
+            vistos.add(chave);
+          }
+        }
 
-        SEEN_MATCHES.set(matchKey, {
-          ...anterior,
-          scoreHomeTeam,
-          scoreAwayTeam,
-          cornerHome,
-          cornerAway,
-          eventos,
-        });
+        const msg = gerarMensagem(match, anterior.placarInicial, eventosUnicos);
 
-        console.log("✏️ Mensagem atualizada:", homeTeam, "vs", awayTeam);
+        try {
+          await axios.post(`${TELEGRAM_API}/editMessageText`, {
+            chat_id: CHAT_ID,
+            message_id: anterior.messageId,
+            text: msg,
+            parse_mode: "Markdown",
+          });
+
+          console.log("✏️ Mensagem atualizada:", homeTeam, "vs", awayTeam);
+
+          SEEN_MATCHES.set(matchKey, {
+            ...anterior,
+            scoreHomeTeam,
+            scoreAwayTeam,
+            cornerHome,
+            cornerAway,
+            eventos: eventosUnicos,
+          });
+        } catch (error) {
+          console.error(
+            "❌ Erro ao editar mensagem:",
+            error.response?.data || error.message
+          );
+        }
       }
     }
   }
