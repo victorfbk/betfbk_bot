@@ -7,7 +7,6 @@ puppeteer.use(StealthPlugin());
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.BOT_TOKEN}`;
 const CHAT_ID = process.env.CHAT_ID;
-
 const SEEN_MATCHES = new Map();
 
 function calcularMediaAtaquesPorMinuto(ataques, minuto) {
@@ -15,7 +14,7 @@ function calcularMediaAtaquesPorMinuto(ataques, minuto) {
   return Number((ataques / minuto).toFixed(2));
 }
 
-function gerarMensagem(match, placarInicial, eventos = []) {
+function gerarMensagem(match, headerData, eventos = []) {
   const fogoHome = match.dangerHomeTeam > match.dangerAwayTeam ? "🔥" : "";
   const fogoAway = match.dangerAwayTeam > match.dangerHomeTeam ? "🔥" : "";
 
@@ -23,8 +22,8 @@ function gerarMensagem(match, placarInicial, eventos = []) {
 🏆 ${match.league}
 ⚔️ ${match.homeTeam} ${fogoHome} vs ${fogoAway} ${match.awayTeam}
 ⏱️ Minuto: ${match.minute}
-📊 Placar Inicial: ${placarInicial}
-🚀 Ataques perigosos: ${match.dangerHomeTeam} - ${match.dangerAwayTeam}
+📊 Placar Inicial: ${headerData.placarInicial}
+🚀 Ataques perigosos: ${headerData.danger}
 `.trim();
 
   const eventosTexto = eventos
@@ -101,16 +100,16 @@ async function buscarPartidas() {
       league,
     } = match;
 
-    if (!minute || !homeTeam || !awayTeam || minute < 64 || minute > 71)
-      continue;
-
-    const mediaHome = calcularMediaAtaquesPorMinuto(dangerHomeTeam, minute);
-    const mediaAway = calcularMediaAtaquesPorMinuto(dangerAwayTeam, minute);
+    if (!minute || !homeTeam || !awayTeam) continue;
 
     const matchKey = `${homeTeam}-${awayTeam}-${league}`;
     const matchData = SEEN_MATCHES.get(matchKey);
 
-    if (!matchData) {
+    // ===> BLOCO DE ENVIO
+    if (!matchData && minute >= 64 && minute <= 71) {
+      const mediaHome = calcularMediaAtaquesPorMinuto(dangerHomeTeam, minute);
+      const mediaAway = calcularMediaAtaquesPorMinuto(dangerAwayTeam, minute);
+
       const isEmpate = scoreHomeTeam === scoreAwayTeam;
       const isDiferencaUmGol = Math.abs(scoreHomeTeam - scoreAwayTeam) === 1;
 
@@ -121,7 +120,12 @@ async function buscarPartidas() {
             (scoreAwayTeam < scoreHomeTeam && mediaAway >= 0.8)))
       ) {
         const placarInicial = `${scoreHomeTeam} x ${scoreAwayTeam}`;
-        const msg = gerarMensagem(match, placarInicial, []);
+        const headerData = {
+          placarInicial,
+          danger: `${dangerHomeTeam} - ${dangerAwayTeam}`,
+        };
+
+        const msg = gerarMensagem(match, headerData, []);
 
         const res = await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: CHAT_ID,
@@ -132,17 +136,19 @@ async function buscarPartidas() {
         console.log("📩 Partida enviada:", homeTeam, "vs", awayTeam);
 
         SEEN_MATCHES.set(matchKey, {
-          minute,
+          headerData,
           scoreHomeTeam,
           scoreAwayTeam,
           cornerHome,
           cornerAway,
           messageId: res.data.result.message_id,
           eventos: [],
-          placarInicial,
         });
       }
-    } else {
+    }
+
+    // ===> BLOCO DE ATUALIZAÇÃO
+    else if (matchData) {
       const anterior = matchData;
       const novosEventos = [];
       let mudou = false;
@@ -153,7 +159,7 @@ async function buscarPartidas() {
       ) {
         novosEventos.push({
           tipo: "⚽",
-          minuto: minute,
+          minuto,
           placar: `${scoreHomeTeam} x ${scoreAwayTeam}`,
         });
         mudou = true;
@@ -165,7 +171,7 @@ async function buscarPartidas() {
       ) {
         novosEventos.push({
           tipo: "🚩",
-          minuto: minute,
+          minuto,
           placar: "",
         });
         mudou = true;
@@ -173,10 +179,9 @@ async function buscarPartidas() {
 
       if (mudou) {
         const eventos = [...anterior.eventos, ...novosEventos];
-
-        // Remover duplicados
         const eventosUnicos = [];
         const vistos = new Set();
+
         for (const ev of eventos) {
           const chave = `${ev.tipo}-${ev.minuto}-${ev.placar}`;
           if (!vistos.has(chave)) {
@@ -185,7 +190,7 @@ async function buscarPartidas() {
           }
         }
 
-        const msg = gerarMensagem(match, anterior.placarInicial, eventosUnicos);
+        const msg = gerarMensagem(match, anterior.headerData, eventosUnicos);
 
         try {
           await axios.post(`${TELEGRAM_API}/editMessageText`, {
