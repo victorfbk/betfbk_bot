@@ -7,8 +7,10 @@ puppeteer.use(StealthPlugin());
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.BOT_TOKEN}`;
 const CHAT_ID = process.env.CHAT_ID;
-
 const SEEN_MATCHES = new Map();
+
+let browser;
+let page;
 
 function calcularMediaAtaquesPorMinuto(ataques, minuto) {
   if (!ataques || !minuto || minuto < 58) return 0;
@@ -37,17 +39,21 @@ function gerarMensagem(match, dadosFixos, eventos = []) {
   return eventosTexto ? `${header}\n\n${eventosTexto}` : header;
 }
 
-async function buscarPartidas() {
-  let browser;
-  try {
+async function iniciarBrowser() {
+  if (!browser) {
     browser = await puppeteer.launch({
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
-
-    const page = await browser.newPage();
+    page = await browser.newPage();
     await page.setViewport({ width: 800, height: 600 });
+  }
+}
+
+async function buscarPartidas() {
+  try {
     console.log("🔍 Buscando partidas em andamento...");
+    await iniciarBrowser();
 
     await page.goto("https://www.totalcorner.com/match/today", {
       waitUntil: "domcontentloaded",
@@ -67,16 +73,13 @@ async function buscarPartidas() {
         const [scoreHomeTeam, scoreAwayTeam] = scoreText
           .split(" - ")
           .map(Number);
-
         const dangerText = getText(".match_dangerous_attacks_div") ?? "0 - 0";
         const [dangerHomeTeam, dangerAwayTeam] = dangerText
           .split(" - ")
           .map(Number);
-
         const league =
           row.querySelector(".td_league a")?.textContent.trim() ??
           "Desconhecida";
-
         const cornerText =
           row.querySelector(".span_match_corner")?.textContent.trim() ??
           "0 - 0";
@@ -115,30 +118,15 @@ async function buscarPartidas() {
         league,
       } = match;
 
-      const minutoValor = minute;
       const matchKey = `${homeTeam}-${awayTeam}-${league}`;
       currentMatchKeys.add(matchKey);
-
       const matchData = SEEN_MATCHES.get(matchKey);
 
       if (!matchData) {
-        if (
-          !minutoValor ||
-          !homeTeam ||
-          !awayTeam ||
-          minutoValor < 63 ||
-          minutoValor > 68
-        )
-          continue;
+        if (!minute || minute < 63 || minute > 68) continue;
 
-        const mediaHome = calcularMediaAtaquesPorMinuto(
-          dangerHomeTeam,
-          minutoValor
-        );
-        const mediaAway = calcularMediaAtaquesPorMinuto(
-          dangerAwayTeam,
-          minutoValor
-        );
+        const mediaHome = calcularMediaAtaquesPorMinuto(dangerHomeTeam, minute);
+        const mediaAway = calcularMediaAtaquesPorMinuto(dangerAwayTeam, minute);
 
         const isEmpate = scoreHomeTeam === scoreAwayTeam;
         const isDiferencaUmGol = Math.abs(scoreHomeTeam - scoreAwayTeam) === 1;
@@ -151,7 +139,7 @@ async function buscarPartidas() {
         ) {
           const dadosFixos = {
             placarInicial: `${scoreHomeTeam} x ${scoreAwayTeam}`,
-            minuto: minutoValor,
+            minuto: minute,
             ataquesIniciais: `${dangerHomeTeam} - ${dangerAwayTeam}`,
             escanteiosIniciais: `${cornerHome} - ${cornerAway}`,
           };
@@ -173,7 +161,7 @@ async function buscarPartidas() {
           });
         }
       } else {
-        if (minutoValor === null || minutoValor > 100) {
+        if (minute === null || minute > 100) {
           SEEN_MATCHES.delete(matchKey);
           console.log("🗑️ Partida finalizada removida:", matchKey);
           continue;
@@ -219,11 +207,9 @@ async function buscarPartidas() {
           });
 
           SEEN_MATCHES.set(matchKey, {
-            ...anterior,
-            scoreHomeTeam,
-            scoreAwayTeam,
-            cornerHome,
-            cornerAway,
+            ...match,
+            messageId: anterior.messageId,
+            dadosFixos: anterior.dadosFixos,
             eventos,
           });
 
@@ -233,7 +219,7 @@ async function buscarPartidas() {
     }
 
     // Limpar partidas que não estão mais na lista
-    SEEN_MATCHES.forEach((value, key) => {
+    SEEN_MATCHES.forEach((_, key) => {
       if (!currentMatchKeys.has(key)) {
         SEEN_MATCHES.delete(key);
         console.log("🗑️ Partida não encontrada removida:", key);
@@ -241,10 +227,11 @@ async function buscarPartidas() {
     });
   } catch (error) {
     console.error("❌ Erro ao buscar partidas:", error.message);
-  } finally {
-    if (browser) await browser.close();
   }
 }
 
-buscarPartidas();
-setInterval(buscarPartidas, 60 * 1000);
+(async () => {
+  await iniciarBrowser();
+  await buscarPartidas();
+  setInterval(buscarPartidas, 60 * 1000);
+})();
