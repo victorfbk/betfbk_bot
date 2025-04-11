@@ -15,12 +15,7 @@ function calcularMediaAtaquesPorMinuto(ataques, minuto) {
   return Number((ataques / minuto).toFixed(2));
 }
 
-/**
- * Gera a mensagem de alerta usando dados fixos (definidos na primeira vez) para o cabeçalho.
- * Os eventos são adicionados na parte inferior.
- */
 function gerarMensagem(match, dadosFixos, eventos = []) {
-  // Dados fixos: placarInicial, minuto, ataquesIniciais, escanteiosIniciais
   const { placarInicial, minuto, ataquesIniciais, escanteiosIniciais } =
     dadosFixos;
   const fogoHome = match.dangerHomeTeam > match.dangerAwayTeam ? "🔥" : "";
@@ -43,45 +38,72 @@ function gerarMensagem(match, dadosFixos, eventos = []) {
 }
 
 async function buscarPartidas() {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
 
-  const page = await browser.newPage();
-  await page.setViewport({ width: 800, height: 600 });
-  console.log("🔍 Buscando partidas em andamento...");
-  await page.goto("https://www.totalcorner.com/match/today");
+    const page = await browser.newPage();
+    await page.setViewport({ width: 800, height: 600 });
+    console.log("🔍 Buscando partidas em andamento...");
 
-  const partidas = await page.evaluate(() => {
-    const rows = document.querySelectorAll("tbody.tbody_match > tr");
-    return Array.from(rows).map((row) => {
-      const getText = (selector) =>
-        row.querySelector(selector)?.textContent.trim() ?? null;
+    await page.goto("https://www.totalcorner.com/match/today", {
+      waitUntil: "domcontentloaded",
+      timeout: 60000, // 60 segundos
+    });
 
-      const minute = parseInt(getText(".match_status_minutes")) || null;
-      const homeTeam = getText(".match_home a > span");
-      const awayTeam = getText(".match_away a > span");
-      const scoreText = getText(".match_goal") ?? "0 - 0";
-      const [scoreHomeTeam, scoreAwayTeam] = scoreText.split(" - ").map(Number);
+    const partidas = await page.evaluate(() => {
+      const rows = document.querySelectorAll("tbody.tbody_match > tr");
+      return Array.from(rows).map((row) => {
+        const getText = (selector) =>
+          row.querySelector(selector)?.textContent.trim() ?? null;
 
-      const dangerText = getText(".match_dangerous_attacks_div") ?? "0 - 0";
-      const [dangerHomeTeam, dangerAwayTeam] = dangerText
-        .split(" - ")
-        .map(Number);
+        const minute = parseInt(getText(".match_status_minutes")) || null;
+        const homeTeam = getText(".match_home a > span");
+        const awayTeam = getText(".match_away a > span");
+        const scoreText = getText(".match_goal") ?? "0 - 0";
+        const [scoreHomeTeam, scoreAwayTeam] = scoreText
+          .split(" - ")
+          .map(Number);
 
-      const league =
-        row.querySelector(".td_league a")?.textContent.trim() ?? "Desconhecida";
+        const dangerText = getText(".match_dangerous_attacks_div") ?? "0 - 0";
+        const [dangerHomeTeam, dangerAwayTeam] = dangerText
+          .split(" - ")
+          .map(Number);
 
-      // Leitura dos escanteios a partir do único span que contém "X - Y"
-      const cornerText =
-        row.querySelector(".span_match_corner")?.textContent.trim() ?? "0 - 0";
-      const [cornerHome, cornerAway] = cornerText.split(" - ").map(Number);
+        const league =
+          row.querySelector(".td_league a")?.textContent.trim() ??
+          "Desconhecida";
 
-      return {
-        minute,
+        const cornerText =
+          row.querySelector(".span_match_corner")?.textContent.trim() ??
+          "0 - 0";
+        const [cornerHome, cornerAway] = cornerText.split(" - ").map(Number);
+
+        return {
+          minute,
+          homeTeam,
+          awayTeam,
+          scoreHomeTeam,
+          scoreAwayTeam,
+          dangerHomeTeam,
+          dangerAwayTeam,
+          cornerHome,
+          cornerAway,
+          league,
+        };
+      });
+    });
+
+    console.log(`⚙️ Analisando ${partidas.length} partidas...`);
+
+    for (const match of partidas) {
+      const {
         homeTeam,
         awayTeam,
+        minute,
         scoreHomeTeam,
         scoreAwayTeam,
         dangerHomeTeam,
@@ -89,147 +111,121 @@ async function buscarPartidas() {
         cornerHome,
         cornerAway,
         league,
-      };
-    });
-  });
+      } = match;
 
-  console.log(`⚙️ Analisando ${partidas.length} partidas...`);
-
-  for (const match of partidas) {
-    // Desestruturamos e criamos um alias para o minuto
-    const {
-      homeTeam,
-      awayTeam,
-      minute,
-      scoreHomeTeam,
-      scoreAwayTeam,
-      dangerHomeTeam,
-      dangerAwayTeam,
-      cornerHome,
-      cornerAway,
-      league,
-    } = match;
-    const minutoValor = minute; // alias para evitar conflitos
-
-    // Verifica se dados essenciais existem e se o minuto está no intervalo desejado.
-    if (
-      !minutoValor ||
-      !homeTeam ||
-      !awayTeam ||
-      minutoValor < 63 ||
-      minutoValor > 68
-    )
-      continue;
-
-    const mediaHome = calcularMediaAtaquesPorMinuto(
-      dangerHomeTeam,
-      minutoValor
-    );
-    const mediaAway = calcularMediaAtaquesPorMinuto(
-      dangerAwayTeam,
-      minutoValor
-    );
-
-    const matchKey = `${homeTeam}-${awayTeam}-${league}`;
-    const matchData = SEEN_MATCHES.get(matchKey);
-
-    // BLOCO DE ENVIO: somente se a partida ainda não foi enviada e estiver dentro do intervalo específico
-    if (!matchData) {
-      const isEmpate = scoreHomeTeam === scoreAwayTeam;
-      const isDiferencaUmGol = Math.abs(scoreHomeTeam - scoreAwayTeam) === 1;
-
+      const minutoValor = minute;
       if (
-        (isEmpate && (mediaHome >= 0.8 || mediaAway >= 0.8)) ||
-        (isDiferencaUmGol &&
-          ((scoreHomeTeam < scoreAwayTeam && mediaHome >= 0.8) ||
-            (scoreAwayTeam < scoreHomeTeam && mediaAway >= 0.8)))
-      ) {
-        const placarInicial = `${scoreHomeTeam} x ${scoreAwayTeam}`;
-        const ataquesIniciais = `${dangerHomeTeam} - ${dangerAwayTeam}`;
-        const escanteiosIniciais = `${cornerHome} - ${cornerAway}`;
+        !minutoValor ||
+        !homeTeam ||
+        !awayTeam ||
+        minutoValor < 63 ||
+        minutoValor > 68
+      )
+        continue;
 
-        const dadosFixos = {
-          placarInicial,
-          minuto: minutoValor, // utiliza o alias para fixar o minuto inicial
-          ataquesIniciais,
-          escanteiosIniciais,
-        };
+      const mediaHome = calcularMediaAtaquesPorMinuto(
+        dangerHomeTeam,
+        minutoValor
+      );
+      const mediaAway = calcularMediaAtaquesPorMinuto(
+        dangerAwayTeam,
+        minutoValor
+      );
 
-        const msg = gerarMensagem(match, dadosFixos, []);
+      const matchKey = `${homeTeam}-${awayTeam}-${league}`;
+      const matchData = SEEN_MATCHES.get(matchKey);
 
-        const res = await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id: CHAT_ID,
-          text: msg,
-          parse_mode: "Markdown",
-        });
+      if (!matchData) {
+        const isEmpate = scoreHomeTeam === scoreAwayTeam;
+        const isDiferencaUmGol = Math.abs(scoreHomeTeam - scoreAwayTeam) === 1;
 
-        console.log("📩 Partida enviada:", homeTeam, "vs", awayTeam);
+        if (
+          (isEmpate && (mediaHome >= 0.8 || mediaAway >= 0.8)) ||
+          (isDiferencaUmGol &&
+            ((scoreHomeTeam < scoreAwayTeam && mediaHome >= 0.8) ||
+              (scoreAwayTeam < scoreHomeTeam && mediaAway >= 0.8)))
+        ) {
+          const dadosFixos = {
+            placarInicial: `${scoreHomeTeam} x ${scoreAwayTeam}`,
+            minuto: minutoValor,
+            ataquesIniciais: `${dangerHomeTeam} - ${dangerAwayTeam}`,
+            escanteiosIniciais: `${cornerHome} - ${cornerAway}`,
+          };
 
-        SEEN_MATCHES.set(matchKey, {
-          ...match,
-          messageId: res.data.result.message_id,
-          eventos: [],
-          dadosFixos,
-        });
-      }
-    } else {
-      // BLOCO DE ATUALIZAÇÃO: a partida já foi enviada; atualiza somente os eventos na parte inferior.
-      const anterior = matchData;
-      const novosEventos = [];
-      let mudou = false;
+          const msg = gerarMensagem(match, dadosFixos, []);
+          const res = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+            chat_id: CHAT_ID,
+            text: msg,
+            parse_mode: "Markdown",
+          });
 
-      // Se houve alteração no placar (gols), adiciona um evento.
-      if (
-        scoreHomeTeam !== anterior.scoreHomeTeam ||
-        scoreAwayTeam !== anterior.scoreAwayTeam
-      ) {
-        novosEventos.push({
-          tipo: "⚽",
-          minuto: match.minute,
-          placar: `${scoreHomeTeam} x ${scoreAwayTeam}`,
-        });
-        mudou = true;
-      }
+          console.log("📩 Partida enviada:", homeTeam, "vs", awayTeam);
 
-      // Calcula quantos novos escanteios ocorreram para cada lado.
-      const novosEscanteiosHome = cornerHome - anterior.cornerHome;
-      const novosEscanteiosAway = cornerAway - anterior.cornerAway;
+          SEEN_MATCHES.set(matchKey, {
+            ...match,
+            messageId: res.data.result.message_id,
+            eventos: [],
+            dadosFixos,
+          });
+        }
+      } else {
+        const anterior = matchData;
+        const novosEventos = [];
+        let mudou = false;
 
-      for (let i = 0; i < novosEscanteiosHome; i++) {
-        novosEventos.push({ tipo: "🚩", minuto: match.minute, placar: "" });
-        mudou = true;
-      }
-      for (let i = 0; i < novosEscanteiosAway; i++) {
-        novosEventos.push({ tipo: "🚩", minuto: match.minute, placar: "" });
-        mudou = true;
-      }
+        if (
+          scoreHomeTeam !== anterior.scoreHomeTeam ||
+          scoreAwayTeam !== anterior.scoreAwayTeam
+        ) {
+          novosEventos.push({
+            tipo: "⚽",
+            minuto: match.minute,
+            placar: `${scoreHomeTeam} x ${scoreAwayTeam}`,
+          });
+          mudou = true;
+        }
 
-      if (mudou) {
-        const eventos = [...anterior.eventos, ...novosEventos];
-        const msg = gerarMensagem(match, anterior.dadosFixos, eventos);
+        const novosEscanteiosHome = cornerHome - anterior.cornerHome;
+        const novosEscanteiosAway = cornerAway - anterior.cornerAway;
 
-        await axios.post(`${TELEGRAM_API}/editMessageText`, {
-          chat_id: CHAT_ID,
-          message_id: anterior.messageId,
-          text: msg,
-          parse_mode: "Markdown",
-        });
+        for (let i = 0; i < novosEscanteiosHome; i++) {
+          novosEventos.push({ tipo: "🚩", minuto: match.minute, placar: "" });
+          mudou = true;
+        }
+        for (let i = 0; i < novosEscanteiosAway; i++) {
+          novosEventos.push({ tipo: "🚩", minuto: match.minute, placar: "" });
+          mudou = true;
+        }
 
-        SEEN_MATCHES.set(matchKey, {
-          ...anterior,
-          scoreHomeTeam,
-          scoreAwayTeam,
-          cornerHome,
-          cornerAway,
-          eventos,
-        });
+        if (mudou) {
+          const eventos = [...anterior.eventos, ...novosEventos];
+          const msg = gerarMensagem(match, anterior.dadosFixos, eventos);
 
-        console.log("✏️ Mensagem atualizada:", homeTeam, "vs", awayTeam);
+          await axios.post(`${TELEGRAM_API}/editMessageText`, {
+            chat_id: CHAT_ID,
+            message_id: anterior.messageId,
+            text: msg,
+            parse_mode: "Markdown",
+          });
+
+          SEEN_MATCHES.set(matchKey, {
+            ...anterior,
+            scoreHomeTeam,
+            scoreAwayTeam,
+            cornerHome,
+            cornerAway,
+            eventos,
+          });
+
+          console.log("✏️ Mensagem atualizada:", homeTeam, "vs", awayTeam);
+        }
       }
     }
+  } catch (error) {
+    console.error("❌ Erro ao buscar partidas:", error.message);
+  } finally {
+    if (browser) await browser.close();
   }
-
-  await browser.close();
 }
 
 buscarPartidas();
