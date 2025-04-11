@@ -11,27 +11,35 @@ const CHAT_ID = process.env.CHAT_ID;
 const SEEN_MATCHES = new Map();
 
 function calcularMediaAtaquesPorMinuto(ataques, minuto) {
-  if (!ataques || !minuto || minuto < 55) return 0;
+  if (!ataques || !minuto || minuto < 58) return 0;
   return Number((ataques / minuto).toFixed(2));
 }
 
-function gerarMensagem(match, placarInicial, eventos = []) {
+/**
+ * Gera a mensagem de alerta usando dados fixos (definidos na primeira vez) para o cabeçalho.
+ * Os eventos são adicionados na parte inferior.
+ */
+function gerarMensagem(match, dadosFixos, eventos = []) {
+  // Dados fixos: placarInicial, minuto, ataquesIniciais, escanteiosIniciais
+  const { placarInicial, minuto, ataquesIniciais, escanteiosIniciais } =
+    dadosFixos;
   const fogoHome = match.dangerHomeTeam > match.dangerAwayTeam ? "🔥" : "";
   const fogoAway = match.dangerAwayTeam > match.dangerHomeTeam ? "🔥" : "";
 
   const header = `
 🏆 ${match.league}
 ⚔️ ${match.homeTeam} ${fogoHome} vs ${fogoAway} ${match.awayTeam}
-⏱️ Minuto: ${match.minute}
+⏱️ Minuto: ${minuto}
 📊 Placar Inicial: ${placarInicial}
-🚀 Ataques perigosos: ${match.dangerHomeTeam} - ${match.dangerAwayTeam}
+🚀 Ataques perigosos: ${ataquesIniciais}
+🚩 Escanteios Iniciais: ${escanteiosIniciais}
 `.trim();
 
   const eventosTexto = eventos
     .map((ev) => `${ev.tipo} ${ev.minuto} ${ev.placar} ✅`)
     .join("\n");
 
-  return eventos.length ? `${header}\n\n${eventosTexto}` : header;
+  return eventosTexto ? `${header}\n\n${eventosTexto}` : header;
 }
 
 async function buscarPartidas() {
@@ -42,13 +50,11 @@ async function buscarPartidas() {
 
   const page = await browser.newPage();
   await page.setViewport({ width: 800, height: 600 });
-
   console.log("🔍 Buscando partidas em andamento...");
   await page.goto("https://www.totalcorner.com/match/today");
 
   const partidas = await page.evaluate(() => {
     const rows = document.querySelectorAll("tbody.tbody_match > tr");
-
     return Array.from(rows).map((row) => {
       const getText = (selector) =>
         row.querySelector(selector)?.textContent.trim() ?? null;
@@ -67,7 +73,9 @@ async function buscarPartidas() {
       const league =
         row.querySelector(".td_league a")?.textContent.trim() ?? "Desconhecida";
 
-      const cornerText = getText(".match_corner") ?? "0 - 0";
+      // Leitura dos escanteios a partir do único span que contém "X - Y"
+      const cornerText =
+        row.querySelector(".span_match_corner")?.textContent.trim() ?? "0 - 0";
       const [cornerHome, cornerAway] = cornerText.split(" - ").map(Number);
 
       return {
@@ -88,6 +96,7 @@ async function buscarPartidas() {
   console.log(`⚙️ Analisando ${partidas.length} partidas...`);
 
   for (const match of partidas) {
+    // Desestruturamos e criamos um alias para o minuto
     const {
       homeTeam,
       awayTeam,
@@ -100,22 +109,31 @@ async function buscarPartidas() {
       cornerAway,
       league,
     } = match;
+    const minutoValor = minute; // alias para evitar conflitos
+
+    // Verifica se dados essenciais existem e se o minuto está no intervalo desejado.
+    if (
+      !minutoValor ||
+      !homeTeam ||
+      !awayTeam ||
+      minutoValor < 63 ||
+      minutoValor > 68
+    )
+      continue;
+
+    const mediaHome = calcularMediaAtaquesPorMinuto(
+      dangerHomeTeam,
+      minutoValor
+    );
+    const mediaAway = calcularMediaAtaquesPorMinuto(
+      dangerAwayTeam,
+      minutoValor
+    );
 
     const matchKey = `${homeTeam}-${awayTeam}-${league}`;
     const matchData = SEEN_MATCHES.get(matchKey);
 
-    // Só pula partidas fora do intervalo SE ainda não foram enviadas
-    if (
-      !minute ||
-      !homeTeam ||
-      !awayTeam ||
-      (!matchData && (minute < 64 || minute > 71))
-    )
-      continue;
-
-    const mediaHome = calcularMediaAtaquesPorMinuto(dangerHomeTeam, minute);
-    const mediaAway = calcularMediaAtaquesPorMinuto(dangerAwayTeam, minute);
-
+    // BLOCO DE ENVIO: somente se a partida ainda não foi enviada e estiver dentro do intervalo específico
     if (!matchData) {
       const isEmpate = scoreHomeTeam === scoreAwayTeam;
       const isDiferencaUmGol = Math.abs(scoreHomeTeam - scoreAwayTeam) === 1;
@@ -127,7 +145,17 @@ async function buscarPartidas() {
             (scoreAwayTeam < scoreHomeTeam && mediaAway >= 0.8)))
       ) {
         const placarInicial = `${scoreHomeTeam} x ${scoreAwayTeam}`;
-        const msg = gerarMensagem(match, placarInicial, []);
+        const ataquesIniciais = `${dangerHomeTeam} - ${dangerAwayTeam}`;
+        const escanteiosIniciais = `${cornerHome} - ${cornerAway}`;
+
+        const dadosFixos = {
+          placarInicial,
+          minuto: minutoValor, // utiliza o alias para fixar o minuto inicial
+          ataquesIniciais,
+          escanteiosIniciais,
+        };
+
+        const msg = gerarMensagem(match, dadosFixos, []);
 
         const res = await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: CHAT_ID,
@@ -138,48 +166,47 @@ async function buscarPartidas() {
         console.log("📩 Partida enviada:", homeTeam, "vs", awayTeam);
 
         SEEN_MATCHES.set(matchKey, {
-          minute,
-          scoreHomeTeam,
-          scoreAwayTeam,
-          cornerHome,
-          cornerAway,
+          ...match,
           messageId: res.data.result.message_id,
           eventos: [],
-          placarInicial,
+          dadosFixos,
         });
       }
     } else {
+      // BLOCO DE ATUALIZAÇÃO: a partida já foi enviada; atualiza somente os eventos na parte inferior.
       const anterior = matchData;
       const novosEventos = [];
       let mudou = false;
 
+      // Se houve alteração no placar (gols), adiciona um evento.
       if (
         scoreHomeTeam !== anterior.scoreHomeTeam ||
         scoreAwayTeam !== anterior.scoreAwayTeam
       ) {
         novosEventos.push({
           tipo: "⚽",
-          minuto: minute,
+          minuto: match.minute,
           placar: `${scoreHomeTeam} x ${scoreAwayTeam}`,
         });
         mudou = true;
       }
 
-      if (
-        cornerHome > anterior.cornerHome ||
-        cornerAway > anterior.cornerAway
-      ) {
-        novosEventos.push({
-          tipo: "🚩",
-          minuto: minute,
-          placar: "",
-        });
+      // Calcula quantos novos escanteios ocorreram para cada lado.
+      const novosEscanteiosHome = cornerHome - anterior.cornerHome;
+      const novosEscanteiosAway = cornerAway - anterior.cornerAway;
+
+      for (let i = 0; i < novosEscanteiosHome; i++) {
+        novosEventos.push({ tipo: "🚩", minuto: match.minute, placar: "" });
+        mudou = true;
+      }
+      for (let i = 0; i < novosEscanteiosAway; i++) {
+        novosEventos.push({ tipo: "🚩", minuto: match.minute, placar: "" });
         mudou = true;
       }
 
       if (mudou) {
         const eventos = [...anterior.eventos, ...novosEventos];
-        const msg = gerarMensagem(match, anterior.placarInicial, eventos);
+        const msg = gerarMensagem(match, anterior.dadosFixos, eventos);
 
         await axios.post(`${TELEGRAM_API}/editMessageText`, {
           chat_id: CHAT_ID,
@@ -205,6 +232,5 @@ async function buscarPartidas() {
   await browser.close();
 }
 
-// 🔁 Executar a cada 1 minuto
 buscarPartidas();
 setInterval(buscarPartidas, 60 * 1000);
