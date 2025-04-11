@@ -51,7 +51,7 @@ async function buscarPartidas() {
 
     await page.goto("https://www.totalcorner.com/match/today", {
       waitUntil: "domcontentloaded",
-      timeout: 60000, // 60 segundos
+      timeout: 60000,
     });
 
     const partidas = await page.evaluate(() => {
@@ -99,6 +99,8 @@ async function buscarPartidas() {
 
     console.log(`⚙️ Analisando ${partidas.length} partidas...`);
 
+    const currentMatchKeys = new Set();
+
     for (const match of partidas) {
       const {
         homeTeam,
@@ -114,28 +116,30 @@ async function buscarPartidas() {
       } = match;
 
       const minutoValor = minute;
-      if (
-        !minutoValor ||
-        !homeTeam ||
-        !awayTeam ||
-        minutoValor < 63 ||
-        minutoValor > 68
-      )
-        continue;
-
-      const mediaHome = calcularMediaAtaquesPorMinuto(
-        dangerHomeTeam,
-        minutoValor
-      );
-      const mediaAway = calcularMediaAtaquesPorMinuto(
-        dangerAwayTeam,
-        minutoValor
-      );
-
       const matchKey = `${homeTeam}-${awayTeam}-${league}`;
+      currentMatchKeys.add(matchKey);
+
       const matchData = SEEN_MATCHES.get(matchKey);
 
       if (!matchData) {
+        if (
+          !minutoValor ||
+          !homeTeam ||
+          !awayTeam ||
+          minutoValor < 63 ||
+          minutoValor > 68
+        )
+          continue;
+
+        const mediaHome = calcularMediaAtaquesPorMinuto(
+          dangerHomeTeam,
+          minutoValor
+        );
+        const mediaAway = calcularMediaAtaquesPorMinuto(
+          dangerAwayTeam,
+          minutoValor
+        );
+
         const isEmpate = scoreHomeTeam === scoreAwayTeam;
         const isDiferencaUmGol = Math.abs(scoreHomeTeam - scoreAwayTeam) === 1;
 
@@ -169,6 +173,12 @@ async function buscarPartidas() {
           });
         }
       } else {
+        if (minutoValor === null || minutoValor > 100) {
+          SEEN_MATCHES.delete(matchKey);
+          console.log("🗑️ Partida finalizada removida:", matchKey);
+          continue;
+        }
+
         const anterior = matchData;
         const novosEventos = [];
         let mudou = false;
@@ -221,6 +231,14 @@ async function buscarPartidas() {
         }
       }
     }
+
+    // Limpar partidas que não estão mais na lista
+    SEEN_MATCHES.forEach((value, key) => {
+      if (!currentMatchKeys.has(key)) {
+        SEEN_MATCHES.delete(key);
+        console.log("🗑️ Partida não encontrada removida:", key);
+      }
+    });
   } catch (error) {
     console.error("❌ Erro ao buscar partidas:", error.message);
   } finally {
