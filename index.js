@@ -11,6 +11,7 @@ const SEEN_MATCHES = new Map();
 
 let browser;
 let page;
+let ciclos = 0;
 
 function calcularMediaAtaquesPorMinuto(ataques, minuto) {
   if (!ataques || !minuto || minuto < 58) return 0;
@@ -54,6 +55,13 @@ async function buscarPartidas() {
   try {
     console.log("🔍 Buscando partidas em andamento...");
     await iniciarBrowser();
+
+    // Verifica se a aba está fechada ou crashada
+    if (!page || page.isClosed()) {
+      console.warn("⚠️ Página estava fechada. Reabrindo nova aba...");
+      page = await browser.newPage();
+      await page.setViewport({ width: 800, height: 600 });
+    }
 
     await page.goto("https://www.totalcorner.com/match/today", {
       waitUntil: "domcontentloaded",
@@ -132,10 +140,10 @@ async function buscarPartidas() {
         const isDiferencaUmGol = Math.abs(scoreHomeTeam - scoreAwayTeam) === 1;
 
         if (
-          (isEmpate && (mediaHome >= 0.8 || mediaAway >= 0.8)) ||
+          (isEmpate && (mediaHome >= 0.9 || mediaAway >= 0.9)) ||
           (isDiferencaUmGol &&
-            ((scoreHomeTeam < scoreAwayTeam && mediaHome >= 0.8) ||
-              (scoreAwayTeam < scoreHomeTeam && mediaAway >= 0.8)))
+            ((scoreHomeTeam < scoreAwayTeam && mediaHome >= 0.9) ||
+              (scoreAwayTeam < scoreHomeTeam && mediaAway >= 0.9)))
         ) {
           const dadosFixos = {
             placarInicial: `${scoreHomeTeam} x ${scoreAwayTeam}`,
@@ -227,11 +235,41 @@ async function buscarPartidas() {
     });
   } catch (error) {
     console.error("❌ Erro ao buscar partidas:", error.message);
+
+    // Se for erro de crash da aba, recria
+    if (error.message.includes("Target crashed")) {
+      try {
+        if (page && !page.isClosed()) await page.close();
+        page = await browser.newPage();
+        await page.setViewport({ width: 800, height: 600 });
+        console.log("✅ Nova aba criada após crash.");
+      } catch (err) {
+        console.error("❌ Erro ao recriar a aba após crash:", err.message);
+      }
+    }
   }
 }
 
 (async () => {
   await iniciarBrowser();
   await buscarPartidas();
-  setInterval(buscarPartidas, 60 * 1000);
+
+  setInterval(async () => {
+    await buscarPartidas();
+    ciclos++;
+
+    // Reinicia o navegador a cada 100 ciclos (~100 minutos)
+    if (ciclos >= 100) {
+      try {
+        console.log("🔁 Reiniciando navegador para liberar memória...");
+        if (page && !page.isClosed()) await page.close();
+        if (browser) await browser.close();
+      } catch (err) {
+        console.error("❌ Erro ao fechar navegador:", err.message);
+      }
+      browser = null;
+      page = null;
+      ciclos = 0;
+    }
+  }, 60 * 1000);
 })();
