@@ -12,6 +12,7 @@ const SEEN_MATCHES = new Map();
 let browser;
 let page;
 let ciclos = 0;
+let consecutiveErrors = 0;
 
 function calcularMediaAtaquesPorMinuto(ataques, minuto) {
   if (!ataques || !minuto || minuto < 58) return 0;
@@ -36,12 +37,11 @@ function gerarMensagem(match, dadosFixos, eventos = []) {
   const eventosTexto = eventos
     .map((ev) => `${ev.tipo} ${ev.minuto} ${ev.placar} ✅`)
     .join("\n");
-
   return eventosTexto ? `${header}\n\n${eventosTexto}` : header;
 }
 
 async function iniciarBrowser() {
-  if (!browser) {
+  if (!browser || !browser.process() || browser.process().exitCode !== null) {
     browser = await puppeteer.launch({
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
@@ -51,12 +51,25 @@ async function iniciarBrowser() {
   }
 }
 
+async function limparCache() {
+  try {
+    await page.evaluate(() => {
+      if (window.caches) {
+        caches.keys().then((keys) => keys.forEach((key) => caches.delete(key)));
+      }
+      localStorage.clear();
+    });
+    await page.deleteCookie(...(await page.cookies()));
+  } catch (err) {
+    console.warn("⚠️ Falha ao limpar cache e cookies:", err.message);
+  }
+}
+
 async function buscarPartidas() {
   try {
     console.log("🔍 Buscando partidas em andamento...");
     await iniciarBrowser();
 
-    // Verifica se a aba está fechada ou crashada
     if (!page || page.isClosed()) {
       console.warn("⚠️ Página estava fechada. Reabrindo nova aba...");
       page = await browser.newPage();
@@ -68,48 +81,55 @@ async function buscarPartidas() {
       timeout: 60000,
     });
 
+    await page.waitForSelector("tbody.tbody_match > tr", { timeout: 10000 });
+
     const partidas = await page.evaluate(() => {
-      const rows = document.querySelectorAll("tbody.tbody_match > tr");
-      return Array.from(rows).map((row) => {
-        const getText = (selector) =>
-          row.querySelector(selector)?.textContent.trim() ?? null;
+      try {
+        const rows = document.querySelectorAll("tbody.tbody_match > tr");
+        return Array.from(rows).map((row) => {
+          const getText = (selector) =>
+            row.querySelector(selector)?.textContent.trim() ?? null;
 
-        const minute = parseInt(getText(".match_status_minutes")) || null;
-        const homeTeam = getText(".match_home a > span");
-        const awayTeam = getText(".match_away a > span");
-        const scoreText = getText(".match_goal") ?? "0 - 0";
-        const [scoreHomeTeam, scoreAwayTeam] = scoreText
-          .split(" - ")
-          .map(Number);
-        const dangerText = getText(".match_dangerous_attacks_div") ?? "0 - 0";
-        const [dangerHomeTeam, dangerAwayTeam] = dangerText
-          .split(" - ")
-          .map(Number);
-        const league =
-          row.querySelector(".td_league a")?.textContent.trim() ??
-          "Desconhecida";
-        const cornerText =
-          row.querySelector(".span_match_corner")?.textContent.trim() ??
-          "0 - 0";
-        const [cornerHome, cornerAway] = cornerText.split(" - ").map(Number);
+          const minute = parseInt(getText(".match_status_minutes")) || null;
+          const homeTeam = getText(".match_home a > span");
+          const awayTeam = getText(".match_away a > span");
+          const scoreText = getText(".match_goal") ?? "0 - 0";
+          const [scoreHomeTeam, scoreAwayTeam] = scoreText
+            .split(" - ")
+            .map(Number);
+          const dangerText = getText(".match_dangerous_attacks_div") ?? "0 - 0";
+          const [dangerHomeTeam, dangerAwayTeam] = dangerText
+            .split(" - ")
+            .map(Number);
+          const league =
+            row.querySelector(".td_league a")?.textContent.trim() ??
+            "Desconhecida";
+          const cornerText =
+            row.querySelector(".span_match_corner")?.textContent.trim() ??
+            "0 - 0";
+          const [cornerHome, cornerAway] = cornerText.split(" - ").map(Number);
 
-        return {
-          minute,
-          homeTeam,
-          awayTeam,
-          scoreHomeTeam,
-          scoreAwayTeam,
-          dangerHomeTeam,
-          dangerAwayTeam,
-          cornerHome,
-          cornerAway,
-          league,
-        };
-      });
+          return {
+            minute,
+            homeTeam,
+            awayTeam,
+            scoreHomeTeam,
+            scoreAwayTeam,
+            dangerHomeTeam,
+            dangerAwayTeam,
+            cornerHome,
+            cornerAway,
+            league,
+          };
+        });
+      } catch (err) {
+        return [];
+      }
     });
 
-    console.log(`⚙️ Analisando ${partidas.length} partidas...`);
+    await limparCache();
 
+    console.log(`⚙️ Analisando ${partidas.length} partidas...`);
     const currentMatchKeys = new Set();
 
     for (const match of partidas) {
@@ -131,7 +151,7 @@ async function buscarPartidas() {
       const matchData = SEEN_MATCHES.get(matchKey);
 
       if (!matchData) {
-        if (!minute || minute < 63 || minute > 68) continue;
+        if (!minute || minute < 59 || minute > 68) continue;
 
         const mediaHome = calcularMediaAtaquesPorMinuto(dangerHomeTeam, minute);
         const mediaAway = calcularMediaAtaquesPorMinuto(dangerAwayTeam, minute);
@@ -226,17 +246,18 @@ async function buscarPartidas() {
       }
     }
 
-    // Limpar partidas que não estão mais na lista
     SEEN_MATCHES.forEach((_, key) => {
       if (!currentMatchKeys.has(key)) {
         SEEN_MATCHES.delete(key);
         console.log("🗑️ Partida não encontrada removida:", key);
       }
     });
+
+    consecutiveErrors = 0;
   } catch (error) {
     console.error("❌ Erro ao buscar partidas:", error.message);
+    consecutiveErrors++;
 
-    // Se for erro de crash da aba, recria
     if (error.message.includes("Target crashed")) {
       try {
         if (page && !page.isClosed()) await page.close();
@@ -246,6 +267,12 @@ async function buscarPartidas() {
       } catch (err) {
         console.error("❌ Erro ao recriar a aba após crash:", err.message);
       }
+    }
+
+    if (consecutiveErrors >= 3) {
+      console.error(
+        "🚨 Erros consecutivos detectados. Pode haver problema persistente."
+      );
     }
   }
 }
@@ -258,7 +285,6 @@ async function buscarPartidas() {
     await buscarPartidas();
     ciclos++;
 
-    // Reinicia o navegador a cada 100 ciclos (~100 minutos)
     if (ciclos >= 100) {
       try {
         console.log("🔁 Reiniciando navegador para liberar memória...");
