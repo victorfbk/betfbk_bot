@@ -44,10 +44,19 @@ async function iniciarBrowser() {
   if (!browser || !browser.process() || browser.process().exitCode !== null) {
     browser = await puppeteer.launch({
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--no-zygote",
+        "--single-process",
+      ],
     });
     page = await browser.newPage();
-    await page.setViewport({ width: 800, height: 600 });
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    );
+    await page.setViewport({ width: 1366, height: 768 });
   }
 }
 
@@ -73,15 +82,45 @@ async function buscarPartidas() {
     if (!page || page.isClosed()) {
       console.warn("⚠️ Página estava fechada. Reabrindo nova aba...");
       page = await browser.newPage();
-      await page.setViewport({ width: 800, height: 600 });
+      await page.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+      );
+      await page.setViewport({ width: 1366, height: 768 });
     }
 
-    await page.goto("https://www.totalcorner.com/match/today", {
-      waitUntil: "domcontentloaded",
-      timeout: 60000,
-    });
+    const url = "https://www.totalcorner.com/match/today";
+    try {
+      await page.goto(url, {
+        waitUntil: ["domcontentloaded", "networkidle2"],
+        timeout: 180000, // 3 minutos
+      });
+    } catch (e) {
+      console.warn("⚠️ goto falhou, tentando reload:", e.message);
+      try {
+        await page.reload({
+          waitUntil: ["domcontentloaded", "networkidle2"],
+          timeout: 180000,
+        });
+      } catch (e2) {
+        throw e2;
+      }
+    }
 
-    await page.waitForSelector("tbody.tbody_match > tr", { timeout: 10000 });
+    // Espera resiliente pelo seletor até 30s no total
+    const start = Date.now();
+    let selectorFound = false;
+    while (Date.now() - start < 30000) {
+      const el = await page.$("tbody.tbody_match > tr");
+      if (el) {
+        selectorFound = true;
+        break;
+      }
+      await page.waitForTimeout(1000);
+    }
+
+    if (!selectorFound) {
+      throw new Error("Seletor tbody.tbody_match > tr não encontrado após 30s");
+    }
 
     const partidas = await page.evaluate(() => {
       try {
@@ -262,7 +301,10 @@ async function buscarPartidas() {
       try {
         if (page && !page.isClosed()) await page.close();
         page = await browser.newPage();
-        await page.setViewport({ width: 800, height: 600 });
+        await page.setUserAgent(
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        );
+        await page.setViewport({ width: 1366, height: 768 });
         console.log("✅ Nova aba criada após crash.");
       } catch (err) {
         console.error("❌ Erro ao recriar a aba após crash:", err.message);
@@ -271,8 +313,18 @@ async function buscarPartidas() {
 
     if (consecutiveErrors >= 3) {
       console.error(
-        "🚨 Erros consecutivos detectados. Pode haver problema persistente."
+        "🚨 Erros consecutivos detectados. Reiniciando browser completo..."
       );
+      try {
+        if (page && !page.isClosed()) await page.close();
+        if (browser) await browser.close();
+      } catch (err) {
+        console.error("❌ Erro ao fechar navegador:", err.message);
+      }
+      browser = null;
+      page = null;
+      ciclos = 0;
+      consecutiveErrors = 0;
     }
   }
 }
@@ -285,7 +337,7 @@ async function buscarPartidas() {
     await buscarPartidas();
     ciclos++;
 
-    if (ciclos >= 100) {
+    if (ciclos >= 50) {
       try {
         console.log("🔁 Reiniciando navegador para liberar memória...");
         if (page && !page.isClosed()) await page.close();

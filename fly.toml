@@ -1,0 +1,23 @@
+# fly.toml app configuration file
+# Documentação: https://fly.io/docs/reference/configuration/
+
+app = "betfbk-bot"
+primary_region = "gru"
+
+[build]
+  # Fly vai usar o Dockerfile automaticamente
+
+[processes]
+  app = "node index.js"
+
+[deploy]
+  strategy = "rolling"
+
+[experimental]
+  auto_rollback = true
+
+[vm]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+# Não precisa de [http_service] pois é um worker, não um servidor web
