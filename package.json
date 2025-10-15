@@ -13,5 +13,8 @@
     "puppeteer-extra": "^3.3.4",
     "puppeteer-extra-plugin-block-resources": "^2.4.3",
     "puppeteer-extra-plugin-stealth": "^2.11.1"
+  },
+  "devDependencies": {
+    "@flydotio/dockerfile": "^0.7.10"
   }
 }
