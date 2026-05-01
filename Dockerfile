@@ -1,28 +1,40 @@
+# Usa uma imagem Node bem leve (Debian Slim)
 FROM node:20-slim
 
-# Instalar dependências necessárias para Chromium/Puppeteer
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 \
-    libatspi2.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libdrm2 libexpat1 \
-    libgbm1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 \
-    libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 \
-    libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 \
-    wget xdg-utils --no-install-recommends \
- && rm -rf /var/lib/apt/lists/*
+# Instala apenas as dependências CRÍTICAS para o Chrome rodar no Linux
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    ca-certificates \
+    procps \
+    libnss3 \
+    libdbus-1-3 \
+    libatk1.0-0 \
+    libgbm-dev \
+    libasound2 \
+    libxrender1 \
+    libxrandr2 \
+    libxss1 \
+    libxtst6 \
+    fonts-liberation \
+    libpangocairo-1.0-0 \
+    libpango-1.0-0 \
+    libgtk-3-0 \
+    && rm -rf /var/lib/apt/lists/*
 
+# Configurações do Puppeteer para não baixar o Chrome de novo (usar o que vem no pacote)
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
+
+# Cria a pasta do app
 WORKDIR /app
 
-# Copiar package.json e package-lock.json
+# Copia apenas os arquivos de dependências primeiro (otimiza build)
 COPY package*.json ./
-
-# Instalar dependências de produção
 RUN npm ci --omit=dev
 
-# Copiar o resto do código
+# Copia o resto do código
 COPY . .
 
-# Variáveis de ambiente
-ENV NODE_ENV=production
-
-# Comando para iniciar o bot
+# Comando para rodar
 CMD ["node", "index.js"]
