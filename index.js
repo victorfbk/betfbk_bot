@@ -173,8 +173,16 @@ async function buscarPartidas() {
       currentMatchKeys.add(matchKey);
       const matchData = SEEN_MATCHES.get(matchKey);
 
+      const dentroJanela =
+        minute !== null &&
+        (
+          (minute >= 29 && minute <= 37) ||
+          (minute >= 60 && minute <= 68) ||
+          (minute >= 84 && minute <= 88)
+        );
+
       if (!matchData) {
-        if (!minute || minute < 26 || minute > 85) continue;
+        if (!dentroJanela) continue;
 
         const mediaHome = calcularMediaAtaquesPorMinuto(dangerHomeTeam, minute);
         const mediaAway = calcularMediaAtaquesPorMinuto(dangerAwayTeam, minute);
