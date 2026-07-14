@@ -167,13 +167,13 @@ async function buscarPartidas() {
         const mediaHome = calcularMediaAtaquesPorMinuto(dangerHomeTeam, minute);
         const mediaAway = calcularMediaAtaquesPorMinuto(dangerAwayTeam, minute);
         const isEmpate = scoreHomeTeam === scoreAwayTeam;
-        const isDiferencaUmGol = Math.abs(scoreHomeTeam - scoreAwayTeam) === 1;
+        const isDiferencaUmGol = Math.abs(scoreHomeTeam - scoreAwayTeam) <= 2;
 
         if (
-          (isEmpate && (mediaHome >= 0.85 || mediaAway >= 0.85)) ||
+          (isEmpate && (mediaHome >= 0.8 || mediaAway >= 0.8)) ||
           (isDiferencaUmGol &&
-            ((scoreHomeTeam < scoreAwayTeam && mediaHome >= 0.85) ||
-              (scoreAwayTeam < scoreHomeTeam && mediaAway >= 0.85)))
+            ((scoreHomeTeam < scoreAwayTeam && mediaHome >= 0.8) ||
+              (scoreAwayTeam < scoreHomeTeam && mediaAway >= 0.8)))
         ) {
           const dadosFixos = {
             placarInicial: `${scoreHomeTeam} x ${scoreAwayTeam}`,
