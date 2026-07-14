@@ -20,7 +20,7 @@ function sleep(ms) {
 }
 
 function calcularMediaAtaquesPorMinuto(ataques, minuto) {
-  if (!ataques || !minuto || minuto < 58) return 0;
+  if (!ataques || !minuto || minuto < 85) return 0;
   return Number((ataques / minuto).toFixed(2));
 }
 
