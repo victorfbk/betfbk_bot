@@ -20,7 +20,7 @@ function sleep(ms) {
 }
 
 function calcularMediaAtaquesPorMinuto(ataques, minuto) {
-  if (!ataques || !minuto || minuto < 58) return 0;
+  if (!ataques || !minuto || minuto < 26) return 0;
   return Number((ataques / minuto).toFixed(2));
 }
 
@@ -43,12 +43,23 @@ function gerarMensagem(match, dadosFixos, eventos = []) {
 }
 
 async function fecharBrowser() {
+  const processoBrowser = browser?.process();
+
   try {
-    if (page && !page.isClosed()) await page.close();
+    if (page && !page.isClosed())
+      await Promise.race([page.close(), sleep(5000)]);
   } catch (_) {}
+
   try {
-    if (browser) await browser.close();
+    if (browser)
+      await Promise.race([browser.close(), sleep(10000)]);
   } catch (_) {}
+
+  try {
+    if (processoBrowser && processoBrowser.exitCode === null)
+      processoBrowser.kill("SIGKILL");
+  } catch (_) {}
+
   browser = null;
   page = null;
 }
@@ -63,6 +74,7 @@ async function iniciarBrowser() {
     await fecharBrowser();
     browser = await puppeteer.launch({
       headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
